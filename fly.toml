@@ -1,0 +1,26 @@
+app = "app-prod"
+primary_region = "mad"
+[build]
+  dockerfile = "Dockerfile"
+[env]
+[http_service]
+  internal_port = 80
+  force_https = true
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 1
+[[services]]
+  protocol = "tcp"
+  internal_port = 80
+  processes = ["app"]
+  [services.concurrency]
+    type = "requests"
+    soft_limit = 25
+    hard_limit = 50
+  [[services.ports]]
+    port = 80
+  [[services.ports]]
+    port = 443
+  [[services.tcp_checks]]
+    interval = "15s"
+    timeout = "2s"

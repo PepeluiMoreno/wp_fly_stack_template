@@ -1,0 +1,45 @@
+name: Deploy Production
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch: {}
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_PROD }}
+      APP: app-prod
+      WORDPRESS_DB_HOST: ${{ secrets.WORDPRESS_DB_HOST_PROD }}
+      WORDPRESS_DB_USER: ${{ secrets.WORDPRESS_DB_USER_PROD }}
+      WORDPRESS_DB_PASSWORD: ${{ secrets.WORDPRESS_DB_PASSWORD_PROD }}
+      WORDPRESS_DB_NAME: ${{ secrets.WORDPRESS_DB_NAME_PROD }}
+      WP_URL: ${{ secrets.WP_URL_PROD }}
+      WP_TITLE: ${{ secrets.WP_TITLE_PROD }}
+      WP_ADMIN_USER: ${{ secrets.WP_ADMIN_USER_PROD }}
+      WP_ADMIN_PASSWORD: ${{ secrets.WP_ADMIN_PASSWORD_PROD }}
+      WP_ADMIN_EMAIL: ${{ secrets.WP_ADMIN_EMAIL_PROD }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build arg (plugins.lock)
+        id: bake
+        run: echo "BAKED=$(tr '\n' ' ' < plugins.lock)" >> $GITHUB_OUTPUT
+      - name: Install Flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@v1
+      - name: Deploy
+        run: |
+          flyctl deploy -a "$APP" --remote-only --build-arg BAKED_WP_PLUGINS="${{ steps.bake.outputs.BAKED }}"
+      - name: Push secrets
+        run: |
+          flyctl secrets set -a "$APP"             WORDPRESS_DB_HOST="$WORDPRESS_DB_HOST"             WORDPRESS_DB_USER="$WORDPRESS_DB_USER"             WORDPRESS_DB_PASSWORD="$WORDPRESS_DB_PASSWORD"             WORDPRESS_DB_NAME="$WORDPRESS_DB_NAME"             WP_URL="$WP_URL"             WP_TITLE="$WP_TITLE"             WP_ADMIN_USER="$WP_ADMIN_USER"             WP_ADMIN_PASSWORD="$WP_ADMIN_PASSWORD"             WP_ADMIN_EMAIL="$WP_ADMIN_EMAIL"
+      - name: Post-deploy (activate baked plugins + db updates)
+        run: |
+          sleep 10
+          flyctl ssh console -a "$APP" -C "bash -lc '
+            set -e
+            cd /var/www/html
+            command -v wp || (curl -fsSLO https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar && chmod +x wp-cli.phar && mv wp-cli.phar /usr/local/bin/wp)
+            for i in {1..30}; do php -r "@mysqli_connect(getenv("WORDPRESS_DB_HOST"), getenv("WORDPRESS_DB_USER"), getenv("WORDPRESS_DB_PASSWORD")) ?: exit(1);" && break || sleep 2; done
+            wp core is-installed --allow-root || wp core install               --url="$WP_URL" --title="$WP_TITLE"               --admin_user="$WP_ADMIN_USER" --admin_password="$WP_ADMIN_PASSWORD"               --admin_email="$WP_ADMIN_EMAIL" --skip-email --allow-root
+            wp plugin activate cloudflare offload-media-cloud-storage --allow-root || true
+            wp core update-db --allow-root || true
+          '"
